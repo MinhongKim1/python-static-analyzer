@@ -116,27 +116,58 @@ def transfer(stmt, state):
     defined = set(state.defined)
     constants = dict(state.constants)
 
-    if isinstance(stmt, ast.Assign):
-        if (
-            len(stmt.targets) != 1
-            or not isinstance(stmt.targets[0], ast.Name)
-        ):
-            return state
-
-        name = stmt.targets[0].id
-        value = eval_expr(stmt.value, constants)
-
+    def write(name, value):
         defined.add(name)
-
         if value is UNKNOWN:
             constants.pop(name, None)
         else:
             constants[name] = value
 
+    if isinstance(stmt, ast.Assign):
+        value = eval_expr(stmt.value, constants)
+        for target in stmt.targets:
+            write(target.id, value)
+
+    elif isinstance(stmt, ast.AnnAssign):
+        if stmt.value is not None:
+            write(stmt.target.id, eval_expr(stmt.value, constants))
+
+    elif isinstance(stmt, ast.AugAssign):
+        name = stmt.target.id
+        old = constants.get(name, UNKNOWN)
+        rhs = eval_expr(stmt.value, constants)
+        value = UNKNOWN
+        fn = OPS.get(type(stmt.op))
+        if old is not UNKNOWN and rhs is not UNKNOWN and fn is not None:
+            try:
+                value = fn(old, rhs)
+            except Exception:
+                pass
+        if name in defined:
+            write(name, value)
+        else:
+            constants.pop(name, None)
+
+    elif isinstance(stmt, ast.Delete):
+        for target in stmt.targets:
+            defined.discard(target.id)
+            constants.pop(target.id, None)
+
+    return State(frozenset(defined), constants)
+
+def enter_block(block, state):
+    if not block.writes_unknown:
+        return state
+    defined = set(state.defined)
+    constants = dict(state.constants)
+    for name in block.writes_unknown:
+        defined.add(name)
+        constants.pop(name, None)
     return State(frozenset(defined), constants)
 
 
 def transfer_block(block, state):
+    state = enter_block(block, state)
     for stmt in block.statements:
         state = transfer(stmt, state)
 
@@ -144,6 +175,8 @@ def transfer_block(block, state):
 
 
 def active_edges(block, state):
+    if block.iteration_condition:
+        return block.edges
     if block.condition is None:
         return block.edges
 

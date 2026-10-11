@@ -48,6 +48,7 @@ def analyze_file(filename, show_cfg=False):
                 cfg,
                 result,
                 parameters,
+                report_liveness=isinstance(function, ast.FunctionDef),
             )
         )
 
